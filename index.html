@@ -37,6 +37,7 @@ fetch('manifest.webmanifest').then(function(r){if(!r.ok)throw 0}).catch(function
  var l=document.createElement('link');l.rel='manifest';l.href=URL.createObjectURL(new Blob([JSON.stringify(man)],{type:'application/manifest+json'}));
  if(m)m.remove();document.head.appendChild(l)})})();
 </script>
+<script>if('serviceWorker' in navigator)addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})})</script>
 </head>
 <body>
 <div id="root"></div>
