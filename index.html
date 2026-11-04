@@ -60,8 +60,9 @@ let UID=null;
 const ck=r=>{if(r.error)throw r.error;return r.data};
 const fromRow=r=>({id:r.id,nome:r.nome,contato:r.contato||'',documento:r.documento||'',dataInicial:r.data_inicial,vencimento:r.vencimento,valor:Number(r.valor),pago:Number(r.pago),tipo:r.tipo,historico:[]});
 const toRow=c=>({nome:c.nome,contato:c.contato||null,documento:c.documento||null,data_inicial:c.dataInicial,vencimento:c.vencimento,valor:c.valor,tipo:c.tipo});
-async function profile(u){UID=u.id;const d=ck(await sb.from('profiles').select('empresa,trial_ends_at,plano_status,is_admin').eq('id',u.id).single());
- return{id:u.id,email:u.email,nome:d.empresa,trialEndsAt:(d.trial_ends_at||'').slice(0,10),plano:d.plano_status,isAdmin:d.is_admin}}
+async function profile(u){UID=u.id;const d=ck(await sb.from('profiles').select('empresa,trial_ends_at,plano_status,is_admin,pago_ate').eq('id',u.id).single());
+ const ok=d.is_admin||(d.plano_status==='ativo'&&d.pago_ate>=today())||(d.plano_status==='teste'&&new Date(d.trial_ends_at)>new Date());
+ return{id:u.id,email:u.email,nome:d.empresa,trialEndsAt:(d.trial_ends_at||'').slice(0,10),pagoAte:d.pago_ate,plano:d.plano_status,isAdmin:d.is_admin,acessoOk:ok}}
 /* clientes "Variável": o total pago é um único lançamento em `pagamentos` (o trigger do banco recalcula clientes.pago) */
 async function setPago(id,novo){ck(await sb.from('pagamentos').delete().eq('cliente_id',id).is('venc_anterior',null));
  if(novo>0)ck(await sb.from('pagamentos').insert({owner_id:UID,cliente_id:id,valor:novo,observacao:'Lançamento manual'}))}
@@ -88,7 +89,12 @@ const api={
    if(c.tipo!=='Fixo'&&Number(cur.pago)!==c.pago)await setPago(id,c.pago)},
   async remove(id){ck(await sb.from('clientes').delete().eq('id',id))},
   async registerPayment(id){ck(await sb.rpc('registrar_pagamento_fixo',{p_cliente:id}))},
-  async undoPayment(id){ck(await sb.rpc('desfazer_pagamento_fixo',{p_cliente:id}))}}};
+  async undoPayment(id){ck(await sb.rpc('desfazer_pagamento_fixo',{p_cliente:id}))}},
+ admin:{
+  async list(){return ck(await sb.from('admin_assinantes').select('*').order('created_at',{ascending:false}))},
+  async liberar(id){ck(await sb.rpc('admin_liberar_30_dias',{p_user:id}))},
+  async bloquear(id){ck(await sb.rpc('admin_bloquear',{p_user:id}))},
+  async estenderTeste(id,dias){ck(await sb.rpc('admin_estender_teste',{p_user:id,p_dias:dias}))}}};
 
 /* ========== comprovantes ========== */
 function printReceipt(c,kind,empresa){
@@ -171,7 +177,7 @@ function ClientForm({initial,onSave,onClose}){
   <div className="flex gap-2 pt-2"><button type="button" onClick={onClose} className="flex-1 rounded-lg border border-navy-700 py-2.5">Cancelar</button><button className="flex-1 btn-gold rounded-lg py-2.5">Salvar</button></div></form>);
 }
 
-function ClientsPanel({title,user,onLogout}){
+function ClientsPanel({title,user,onLogout,extra}){
  const [list,setList]=useState([]);const [loading,setLoading]=useState(true);const [msg,setMsg]=useState('');
  const [q,setQ]=useState('');const [flt,setFlt]=useState('todos');const [modal,setModal]=useState(null);
  const run=async fn=>{try{await fn();setMsg('')}catch(e){const m=e.message||'';setMsg(/row-level security/i.test(m)?'Sua assinatura não está ativa (teste encerrado ou plano pendente). Você ainda pode consultar os dados.':(m||'Erro inesperado'));setLoading(false)}};
@@ -200,9 +206,10 @@ function ClientsPanel({title,user,onLogout}){
   <header className="sticky top-0 z-30 bg-navy-900/95 backdrop-blur border-b border-gold-600/30">
    <div className="max-w-6xl mx-auto px-4 py-2.5 flex items-center gap-3">
     <img src={LOGO} alt="" className="w-10 h-10 rounded-lg object-cover"/>
-    <div className="flex-1 min-w-0"><p className="font-bold gold-text leading-tight truncate">Rina Soluções</p><p className="text-xs text-slate-400 truncate">{user.nome} · {user.plano==='ativo'?'plano ativo':'teste até '+fmt(user.trialEndsAt)}</p></div>
-    <button onClick={onLogout} className="text-sm text-slate-300 border border-navy-700 rounded-lg px-3 py-1.5">Sair</button></div></header>
+    <div className="flex-1 min-w-0"><p className="font-bold gold-text leading-tight truncate">Rina Soluções</p><p className="text-xs text-slate-400 truncate">{user.nome} · {user.isAdmin?'ADM Master':user.plano==='ativo'?'ativo até '+fmt(user.pagoAte):'teste até '+fmt(user.trialEndsAt)}</p></div>
+    {extra}<button onClick={onLogout} className="text-sm text-slate-300 border border-navy-700 rounded-lg px-3 py-1.5">Sair</button></div></header>
   <main className="max-w-6xl mx-auto p-4 space-y-5">
+   {!user.acessoOk&&<div className="rounded-lg bg-gold-500/10 border border-gold-500/40 text-gold-300 text-sm p-3">Seu acesso está vencido: você pode consultar os dados, mas não editar. Entre em contato com a Rina Soluções para renovar.</div>}
    {msg&&<div className="rounded-lg bg-red-500/15 border border-red-500/40 text-red-200 text-sm p-3">{msg}</div>}
    <div className="flex items-center justify-between gap-3"><h1 className="text-xl font-bold">{title}</h1>
     <button onClick={()=>setModal({type:'edit'})} className="btn-gold rounded-lg px-4 py-2 text-sm">+ Novo Cliente</button></div>
@@ -246,11 +253,73 @@ function ClientsPanel({title,user,onLogout}){
  </div>);
 }
 
+const SIT={ativo:['Ativo','bg-emerald-500/15 text-emerald-300'],teste:['Em teste','bg-gold-500/15 text-gold-300'],vencido:['Vencido','bg-red-500/15 text-red-300'],teste_encerrado:['Teste encerrado','bg-red-500/15 text-red-300'],inadimplente:['Bloqueado','bg-red-500/15 text-red-300'],cancelado:['Cancelado','bg-slate-500/20 text-slate-300']};
+const addDays=(s,n)=>{const d=new Date(s+'T12:00:00');d.setDate(d.getDate()+n);return d.toISOString().slice(0,10)};
+const fmtD=s=>s?fmt(String(s).slice(0,10)):'—';
+function AdminPanel({user,onLogout,extra}){
+ const [rows,setRows]=useState([]);const [loading,setLoading]=useState(true);const [q,setQ]=useState('');const [modal,setModal]=useState(null);const [msg,setMsg]=useState('');
+ const fetchRows=async()=>{setRows(await api.admin.list());setLoading(false)};
+ const run=async fn=>{try{await fn();setMsg('')}catch(e){setMsg(e.message||'Erro inesperado');setLoading(false)}};
+ useEffect(()=>{run(fetchRows)},[]);
+ const act=fn=>run(async()=>{await fn();setModal(null);await fetchRows()});
+ const shown=rows.filter(r=>((r.empresa||'')+' '+(r.email||'')).toLowerCase().includes(q.toLowerCase()));
+ const n=k=>rows.filter(r=>r.situacao===k).length;
+ const bloq=rows.filter(r=>['vencido','teste_encerrado','inadimplente','cancelado'].includes(r.situacao)).length;
+ const novoAte=r=>addDays(r.pago_ate&&r.pago_ate>today()?r.pago_ate:today(),30);
+ const Badge=({r})=>{const[t,c]=SIT[r.situacao]||[r.situacao,'bg-slate-500/20 text-slate-300'];return<span className={'px-2 py-0.5 rounded-full text-xs font-semibold '+c}>{t}</span>};
+ const ate=r=>r.situacao==='teste'||r.situacao==='teste_encerrado'?'Teste até '+fmtD(r.trial_ends_at):'Pago até '+fmtD(r.pago_ate);
+ const Acts=({r})=>(<div className="flex flex-wrap gap-1.5">
+  <button onClick={()=>setModal({type:'lib',r})} className="px-2.5 py-1.5 rounded-md bg-emerald-500/20 text-emerald-300 text-xs font-semibold">✅ Liberar 30 dias</button>
+  <button onClick={()=>act(()=>api.admin.estenderTeste(r.id,15))} className="px-2.5 py-1.5 rounded-md bg-navy-700 text-xs">+15 dias de teste</button>
+  <button onClick={()=>setModal({type:'blq',r})} className="px-2.5 py-1.5 rounded-md bg-red-500/15 text-red-300 text-xs">⛔ Bloquear</button></div>);
+ return(
+ <div className="min-h-screen bg-navy-950">
+  <header className="sticky top-0 z-30 bg-navy-900/95 backdrop-blur border-b border-gold-600/30"><div className="max-w-6xl mx-auto px-4 py-2.5 flex items-center gap-3">
+   <img src={LOGO} alt="" className="w-10 h-10 rounded-lg object-cover"/>
+   <div className="flex-1 min-w-0"><p className="font-bold gold-text leading-tight truncate">Painel ADM Master</p><p className="text-xs text-slate-400 truncate">{user.email}</p></div>
+   {extra}<button onClick={onLogout} className="text-sm text-slate-300 border border-navy-700 rounded-lg px-3 py-1.5">Sair</button></div></header>
+  <main className="max-w-6xl mx-auto p-4 space-y-5">
+   <h1 className="text-xl font-bold">Assinantes</h1>
+   {msg&&<div className="rounded-lg bg-red-500/15 border border-red-500/40 text-red-200 text-sm p-3">{msg}</div>}
+   <section className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+    <Stat label="Total de assinantes" value={rows.length}/>
+    <Stat label="Ativos" value={n('ativo')} tone="text-emerald-300"/>
+    <Stat label="Em teste" value={n('teste')}/>
+    <Stat label="Vencidos / bloqueados" value={bloq} tone="text-red-300"/>
+    <Stat label="Receita mensal estimada" value={brl(n('ativo')*21)} sub="ativos × R$ 21,00"/></section>
+   <input className={inp+' sm:max-w-xs'} placeholder="🔍 Buscar empresa ou e-mail…" value={q} onChange={e=>setQ(e.target.value)}/>
+   {loading?<p className="text-slate-400">Carregando…</p>:shown.length===0?<p className="text-slate-400 text-center py-10">Nenhum assinante encontrado.</p>:<>
+    <div className="hidden md:block rounded-xl border border-navy-700 overflow-x-auto">
+     <table className="w-full text-sm"><thead className="bg-navy-900 text-slate-400 text-left"><tr>{['Empresa','Situação','Validade','Clientes','Cadastro','Ações'].map(h=><th key={h} className="px-3 py-3 font-medium whitespace-nowrap">{h}</th>)}</tr></thead>
+      <tbody>{shown.map(r=><tr key={r.id} className="border-t border-navy-700 hover:bg-navy-900/60">
+       <td className="px-3 py-3"><p className="font-semibold">{r.empresa}</p><p className="text-xs text-slate-400">{r.email}</p></td>
+       <td className="px-3 py-3"><Badge r={r}/></td><td className="px-3 py-3 whitespace-nowrap">{ate(r)}</td>
+       <td className="px-3 py-3">{r.total_clientes}</td><td className="px-3 py-3 whitespace-nowrap">{fmtD(r.created_at)}</td>
+       <td className="px-3 py-3"><Acts r={r}/></td></tr>)}</tbody></table></div>
+    <div className="md:hidden space-y-3">{shown.map(r=><div key={r.id} className="rounded-xl bg-navy-900 border border-navy-700 p-4 space-y-2">
+     <div className="flex justify-between items-start gap-2"><div className="min-w-0"><p className="font-semibold truncate">{r.empresa}</p><p className="text-xs text-slate-400 truncate">{r.email}</p></div><Badge r={r}/></div>
+     <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm"><span className="text-slate-400">Validade</span><span className="text-right">{ate(r)}</span>
+      <span className="text-slate-400">Clientes</span><span className="text-right">{r.total_clientes}</span>
+      <span className="text-slate-400">Cadastro</span><span className="text-right">{fmtD(r.created_at)}</span></div><Acts r={r}/></div>)}</div></>}
+  </main>
+  {modal?.type==='lib'&&<Modal title="Liberar 30 dias" onClose={()=>setModal(null)}>
+   <p className="text-sm mb-1"><b>{modal.r.empresa}</b></p><p className="text-xs text-slate-400 mb-3">{modal.r.email}</p>
+   <p className="text-sm text-slate-300 mb-4">Registra o pagamento de <b className="text-gold-300">R$ 21,00</b> e libera o acesso até <b className="text-gold-300">{fmt(novoAte(modal.r))}</b>.</p>
+   <div className="flex gap-2"><button onClick={()=>setModal(null)} className="flex-1 rounded-lg border border-navy-700 py-2.5">Cancelar</button><button onClick={()=>act(()=>api.admin.liberar(modal.r.id))} className="flex-1 btn-gold rounded-lg py-2.5">Confirmar</button></div></Modal>}
+  {modal?.type==='blq'&&<Modal title="Bloquear acesso" onClose={()=>setModal(null)}>
+   <p className="text-sm mb-4">Bloquear <b>{modal.r.empresa}</b>? Ele continua vendo os dados, mas não consegue editar até você liberar de novo.</p>
+   <div className="flex gap-2"><button onClick={()=>setModal(null)} className="flex-1 rounded-lg border border-navy-700 py-2.5">Cancelar</button><button onClick={()=>act(()=>api.admin.bloquear(modal.r.id))} className="flex-1 rounded-lg bg-red-600 py-2.5 font-semibold">Bloquear</button></div></Modal>}
+ </div>);
+}
+
 function App(){
- const [user,setUser]=useState(null);const [ready,setReady]=useState(false);
+ const [user,setUser]=useState(null);const [ready,setReady]=useState(false);const [view,setView]=useState('clientes');
  useEffect(()=>{api.auth.session().then(setUser).catch(()=>{}).finally(()=>setReady(true))},[]);
  if(!ready)return <div className="min-h-screen flex items-center justify-center text-slate-400">Carregando…</div>;
- return user?<ClientsPanel title="Meus Clientes" user={user} onLogout={async()=>{await api.auth.signOut();setUser(null)}}/>:<Login onAuth={setUser}/>;
+ if(!user)return <Login onAuth={setUser}/>;
+ const out=async()=>{await api.auth.signOut();setUser(null);setView('clientes')};
+ const nav=user.isAdmin?<button onClick={()=>setView(view==='admin'?'clientes':'admin')} className="text-sm btn-gold rounded-lg px-3 py-1.5 mr-2">{view==='admin'?'Meus clientes':'👑 Assinantes'}</button>:null;
+ return view==='admin'&&user.isAdmin?<AdminPanel user={user} onLogout={out} extra={nav}/>:<ClientsPanel title="Meus Clientes" user={user} onLogout={out} extra={nav}/>;
 }
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
