@@ -1,7 +1,7 @@
 {
  "name": "Rina Soluções - Gestão de Pagamentos",
  "short_name": "Rina",
- "start_url": "/",
+ "start_url": "./",
  "display": "standalone",
  "background_color": "#0a1a33",
  "theme_color": "#0a1a33",
@@ -22,5 +22,7 @@
    "type": "image/png",
    "purpose": "maskable"
   }
- ]
+ ],
+ "scope": "./",
+ "id": "./"
 }
